@@ -1,0 +1,120 @@
+---
+title: "Freeze-thaw cycle trends for Waterville, ME (USA)"
+author: "Manuel Gimond"
+format: 
+  html:
+    code-fold: true
+---
+
+```{r echo = FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+The inspiration for this brief analysis is to validate an observation made in central Maine (USA) whereby occurrences of freeze-thaw events seem to have increased over the past several decades. Freeze-thaw events have an impact on road infrastructures by increasing the likelihood of frost heaving. It also impacts maple syrup producers who time their tapping season based on freeze-thaw events.
+
+## Dataset
+
+
+```{r data_prep}
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+
+# A few variables
+nn <- 4 # Number of continuous hours
+na_hours <- 96
+
+# Load the data
+dat <- readRDS("met1991_2022.Rds")
+
+# Identify continuous hourly gaps
+dates.all <- seq(min(dat$Date_EST), max(dat$Date_EST), by = "1 hour")
+dat_complete <- dat %>% 
+  select(Date_EST, Temp) %>% 
+  complete(Date_EST = dates.all,
+           fill = list(Temp = NA)) %>% 
+  mutate(year = year(Date_EST), 
+         month = month(Date_EST, label = TRUE),
+         day = day(Date_EST),
+         hour = hour(Date_EST)) 
+
+# Identify all months with at least 4 days worth of missing values
+months_na <- dat_complete %>% 
+  group_by(year, month) %>% 
+  summarise(missing = sum(is.na(Temp))) %>% 
+  filter(missing > na_hours)
+
+# Count the number of times temperatures have flipped
+# (4 continuous hours below freezing followed by 4 continuous
+# hours above freezing, etc ...)
+dat_flip <- dat_complete %>% 
+  mutate(bin = ifelse(Temp >= 32, 1, 0)) %>% 
+  group_by(year , month ) %>% 
+  reframe(rl = list(rle(bin)),
+            bin = rl[[1]]$values,
+            cnt = rl[[1]]$lengths) %>% 
+  ungroup() %>% 
+  select(-rl) %>% 
+  mutate(cnt_lag = lag(cnt),
+         bin_lag = lag(bin),
+         flip = case_when(cnt >= nn & cnt_lag >= nn & bin != bin_lag ~ TRUE,
+                          TRUE ~ FALSE)) %>% 
+  group_by(year, month) %>% 
+  summarize(flip= sum(flip)) %>% 
+  filter(flip !=0)
+
+# Remove all months with at least na_hours worth of missing values
+dat_flip_no_na <- dat_flip %>% 
+  anti_join(months_na, by=c("year","month"))
+```
+
+The meteorological data are recorded at the Robert LaFleur airport in Waterville, Maine (USA). Its WGS84 coordinate location is 44.5332&deg;N and 69.6755&deg;W. The data have been tabulated in a separate [repo](https://github.com/mgimond/meteo_waterville/blob/master/Meteo_lite.R). For this analysis, a freeze-thaw event is defined as one where a temperature above or below 32&deg;F for a continuous period of at least `r nn` hours is followed by a period of `r nn` or more hours where the temperature swings to the other side of the 32&deg;F freezing threshold.
+
+The freeze-thaw counts are aggregated by month and year. If any one month has more than 96 hours worth of missing temperature values, that month is flagged and removed from all subsequent analyses.
+
+## Results
+
+### Heat map of freeze-thaw frequencies
+
+The following figure generates a heat map of freeze-thaw counts by month and year. The light grey boxes show month/years for which more than `r na_hours` hours worth of data were missing for that month.
+
+```{r fig.height=6, fig.width = 4.5}
+ggplot() + 
+  geom_tile(data = months_na, aes(x=month,y=year, fill = "Count"), 
+            fill = "grey", alpha=0.3) +
+  geom_tile(data = dat_flip_no_na, aes(x=month, y = year, fill = flip)) +
+  scale_fill_binned(low = "yellow", high = "red", name = "count",
+                    breaks =  as.numeric(quantile(dat_flip_no_na$flip, probs = 1:10/10))) +
+  theme_minimal() +
+  ggtitle("Freeze-thaw cycle count") +
+  theme(plot.title = element_text(color = "grey40"))
+```
+
+### Freeze-thaw frequency trends
+
+The following figure generates yearly trend in freeze-thaw counts by month. The light grey vertical bars show years for which more than `r na_hours` hours worth of data were missing for that month. These observations are not included in the trends. The blue lines model trend using a 1^st^ order polynomial loess fit.
+
+```{r fig.height=6, fig.width = 7}
+ggplot() +
+  geom_point(data= dat_flip_no_na, aes(x = year, y = flip)) + 
+  geom_smooth(data= dat_flip_no_na, aes(x = year, y = flip),
+              method = loess, se = FALSE, 
+              method.args=list(family="symmetric", degree = 1)) +
+  geom_rect(data = months_na, aes(xmin=year-0.5 , xmax =year+0.5, ymin=-Inf, ymax=Inf), 
+            fill = "grey", alpha = 0.3) +
+  xlab("year") + ylab("count") +
+  facet_wrap(~month, nrow = 3, drop = FALSE) +
+  ggtitle("Freeze-thaw cycle count") +
+  theme(plot.title = element_text(color = "grey40"))
+```
+
+A few observations that can be gleaned from the above plots follow:
+
+* There is a clear monotonic increase in freeze-thaw counts over a thirty year period for the months of February and March. The February increase in count can be explained by the [increase in median temperatures](https://mgimond.github.io/meteo_waterville/#change-in-median-temperature-values-over-the-years) for that month. While an increase in median temperature is not as prominent for March, the [slight increase in the bottom 10% of its temperatures](https://mgimond.github.io/meteo_waterville/#change-in-high-temperature-values-over-the-years) combined with no change in it top 10% of temperatures may explain the increase in fluctuation around the 32&deg;F point.
+
+* An uptick in freeze-thaw cycles can be observed for the month of January starting around 2013.
+
+* April sees a slight decrease in freeze-thaw cycles over a thirty year period.
+
+* November and December do not show an obvious monotonic increase or decrease in freeze-thaw cycles over the 30 year period, however, there seems to be a slight uptick starting at around 2010.
