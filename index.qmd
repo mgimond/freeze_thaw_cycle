@@ -26,7 +26,7 @@ nn <- 4 # Number of continuous hours
 na_hours <- 96
 
 # Load the data
-dat <- readRDS("met1991_2022.Rds")
+dat <- readRDS("met1991_2023.Rds")
 
 # Identify continuous hourly gaps
 dates.all <- seq(min(dat$Date_EST), max(dat$Date_EST), by = "1 hour")
